@@ -79,6 +79,8 @@ struct buffer {
 	bool clear;
 };
 
+#define FRAME_TIMESTAMPS_BUFFER_LEN 32768
+
 #define CTRL_FLAG_DISABLED	(V4L2_CTRL_FLAG_READ_ONLY | \
 				 V4L2_CTRL_FLAG_INACTIVE | \
 				 V4L2_CTRL_FLAG_GRABBED)
@@ -142,7 +144,7 @@ private slots:
 	void capSdrFrame();
 	void saveRaw(bool);
 	void setRenderMethod(bool);
-	void setBlending(bool);
+        void setBlending(bool);
 	void setLinearFilter(bool);
 	void traceIoctls(bool);
 	void changeAudioDevice();
@@ -153,6 +155,8 @@ private slots:
 	void openrawdev();
 	void ctrlAction(int);
 	void openRawFile(const QString &s);
+        void addSERHeader(int nframes); // add SER header (LUCAM-RECORDER)
+  
 	void rejectedRawFile();
 	void setAudioBufferSize();
 	void enableScaling(bool enable);
@@ -194,6 +198,7 @@ public:
 	void updateColorspace();
 	QAction *m_resetScalingAct;
 	QAction *m_useBlendingAct;
+	QAction *m_useSERFormatAct;
 	QAction *m_useLinearAct;
 	QAction *m_snapshotAct;
 	QAction *m_showFramesAct;
@@ -288,6 +293,8 @@ private:
 	struct vbi_handle m_vbiHandle;
 	int m_sdrSize;
 	unsigned m_frame;
+        int n_frames_saved;
+        quint64 frame_timestamps[FRAME_TIMESTAMPS_BUFFER_LEN];
 	double m_fps;
 	struct timespec m_startTimestamp;
 	struct timeval m_totalAudioLatency;

@@ -287,6 +287,12 @@ ApplicationWindow::ApplicationWindow() :
 		connect(m_useGLAct, SIGNAL(toggled(bool)), this, SLOT(setRenderMethod(bool)));
 		m_capMenu->addAction(m_useGLAct);
 
+		m_useSERFormatAct = new QAction("Use &SER Format", this);
+		m_useSERFormatAct->setStatusTip("Save data using SER (LUCAM-RECORDER) format");
+		m_useSERFormatAct->setCheckable(true);
+		m_useSERFormatAct->setChecked(true);
+		m_capMenu->addAction(m_useSERFormatAct);
+
 		m_useBlendingAct = new QAction("Enable &Blending", this);
 		m_useBlendingAct->setStatusTip("Enable blending to test the alpha component in the image");
 		m_useBlendingAct->setCheckable(true);
@@ -1031,6 +1037,10 @@ void ApplicationWindow::capFrame()
 	struct timeval tv_alsa;
 #endif
 
+	struct timespec tp;
+	clock_gettime (CLOCK_REALTIME, &tp);
+	frame_timestamps[n_frames_saved%FRAME_TIMESTAMPS_BUFFER_LEN] = tp.tv_sec*10000000 + tp.tv_nsec/100;
+
 	if (m_singleStep)
 		m_capNotifier->setEnabled(false);
 
@@ -1049,11 +1059,14 @@ void ApplicationWindow::capFrame()
 			}
 			return;
 		}
-		if (m_makeSnapshot)
+		if (m_makeSnapshot){
 			makeSnapshot((unsigned char *)m_frameData, s);
-		if (m_saveRaw.openMode())
+			++n_frames_saved;
+		}
+		if (m_saveRaw.openMode()){
 			m_saveRaw.write((const char *)m_frameData, s);
-
+			++n_frames_saved;
+		}
 		plane[0] = m_frameData;
 		if (showFrames() && m_mustConvert) {
 			err = v4lconvert_convert(m_convertData, &m_capSrcFormat, &m_capDestFormat,
@@ -1108,10 +1121,14 @@ void ApplicationWindow::capFrame()
 				bytesused[0] = m_capDestFormat.fmt.pix.sizeimage;
 			}
 		}
-		if (m_makeSnapshot)
+		if (m_makeSnapshot){
 			makeSnapshot(plane[0], bytesused[0]);
-		if (m_saveRaw.openMode())
+		        ++n_frames_saved;
+		}
+		if (m_saveRaw.openMode()){
 			m_saveRaw.write((const char *)plane[0], bytesused[0]);
+		        ++n_frames_saved;
+		}
 
 		break;
 	}
@@ -1124,7 +1141,10 @@ void ApplicationWindow::capFrame()
 
 	float wscale = m_capture->getHorScaleFactor();
 	float hscale = m_capture->getVertScaleFactor();
-	status = QString("Frame: %1 Fps: %2 Scale Factors: %3x%4").arg(++m_frame)
+	++m_frame;
+	int fc = n_frames_saved? n_frames_saved:m_frame;
+	
+	status = QString("Frame: %1 Fps: %2 Scale Factors: %3x%4").arg(fc)
 			 .arg(m_fps, 0, 'f', 2, '0').arg(wscale).arg(hscale);
 	if (m_capMethod != methodRead)
 		status.append(QString(" SeqNr: %1").arg(buf.g_sequence()));
@@ -1704,23 +1724,112 @@ void ApplicationWindow::rejectedRawFile()
 	m_saveRawAct->setChecked(false);
 }
 
+void ApplicationWindow::addSERHeader(int nframes)
+{
+        // SER HEADER: 178 BYTES
+        struct SERheaderID {
+                uchar FileID[16]; //1 "LUCAM-RECORDER"
+        } lucam;
+        struct SERheader {
+                //uchar FileID[14]; //1 "LUCAM-RECORDER" -- alignment problem here!!
+                quint32 LuID;     //2 serial = 0
+                quint32 ColorID;  //3 MONO = 0, BAYER_RGGB=8, ..., RGB=100, BGR=101; see docu
+                quint32 LittleEndian; //4 1=LE (TRUE), 0=522BE
+                quint32 ImageWidth;   //5   3088
+                quint32 ImageHeight;  //6   2064
+                quint32 PixelDepthPerPlane; //7   12
+                // True bit depth per pixel per plane. [MONO...BAYER+*: NumPlanes=1, RGB,BGR: NumPlanes=3;] 1..8: 1Byte/Pixel*NumPLanes, 9..16: 2Byte/Pixel*NumPLanes
+                quint32 FrameCount;   //8
+                uchar Observer[40];   //9
+                uchar Instrument[40]; //10
+                uchar Telescope[40];  //11
+                quint64 DateTime;     //12 Start time of image stream (local time) If 12_DateTime <= 0 then 12_DateTime is invalid and the SER file does not contain a Time stamp trailer.
+                quint64 DateTimeUTC;  //13 in UTC
+        } ser_header;
+        memset ((char*)&lucam, 0, sizeof(lucam)); // zero
+	memcpy ((char*)&lucam, "LUCAM-RECORDER", 14);
+        memset ((char*)&ser_header, 0, sizeof(ser_header)); // zero
+	ser_header.ColorID = 0; // m_capDestFormat.fmt.pix.pixelformat , m_capImage->bytesPerLine()
+	ser_header.LittleEndian = 1;
+	ser_header.ImageWidth  = m_capImage->width();
+	ser_header.ImageHeight = m_capImage->height();
+	ser_header.PixelDepthPerPlane = m_capImage->depth();
+	ser_header.FrameCount = nframes; // adjust at end!!
+	memcpy ((char *)ser_header.Observer,   "AAAA Observer AAAAAAAAAAAAAAAAAAAAAAAAAA", 40);
+	memcpy ((char *)ser_header.Instrument, "AAAA Instrument V4L2 Cam AAAAAAAAAAAAAAA", 40);
+	memcpy ((char *)ser_header.Telescope,  "AAAA Linux AAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 40);
+
+	struct timespec tp;
+	clock_gettime (CLOCK_REALTIME, &tp);
+	
+	ser_header.DateTime    = tp.tv_sec*10000000 + tp.tv_nsec/100; // in 100ns -- UTC
+	ser_header.DateTimeUTC = tp.tv_sec*10000000 + tp.tv_nsec/100;
+
+        if (nframes>0){		
+		// write tailer....
+		printf ("Finish writing Raw as SER (LUCAM-RECORDER) File, # Frames: %d", ser_header.FrameCount);
+		if (n_frames_saved > FRAME_TIMESTAMPS_BUFFER_LEN)
+		        printf ("WARNING: more frames saves than time stamps available (buffer limit reached) MAX: %d\n", FRAME_TIMESTAMPS_BUFFER_LEN);
+		for (int i=0; i<n_frames_saved; ++i){
+		        printf ("Time of frame #%d = %llu\n", i, frame_timestamps[i%FRAME_TIMESTAMPS_BUFFER_LEN]);
+		}
+		m_saveRaw.write((const char *)&frame_timestamps[0], sizeof(quint64) * (n_frames_saved%FRAME_TIMESTAMPS_BUFFER_LEN));
+		
+		// update header with actual FrameCount
+   	        m_saveRaw.seek(14+6*4); // FrameCount
+		m_saveRaw.write((const char *)&ser_header.FrameCount, sizeof(ser_header.FrameCount)); // update
+		
+		n_frames_saved = 0; // done and reset..
+		return;
+	} else {
+	        m_saveRaw.write((const char *)&lucam, 14); // write file ID
+		m_saveRaw.write((const char *)&ser_header, sizeof(ser_header)); // write header
+	}
+
+	n_frames_saved = 0; // init to 0
+	
+	printf ("Writing Raw as SER (LUCAM-RECORDER) File:");
+	printf (" ColorID=%d %s\n", ser_header.ColorID, ser_header.ColorID==0 ? "MONO": ser_header.ColorID < 100?"BAYER_***":"RGB/BGR");
+	printf (" %sEndian\n", ser_header.LittleEndian?"Little":"Big");
+	printf (" Image Width %d x Height %d\n", ser_header.ImageWidth, ser_header.ImageHeight);
+	printf (" PixelDepthPerPlane: %d\n", ser_header.PixelDepthPerPlane);
+	printf (" FrameCount:         %d\n", ser_header.FrameCount);
+	// NULL terminate last char for printing purpose only
+	ser_header.Observer[39]=0;
+	ser_header.Instrument[39]=0;
+	ser_header.Telescope[39]=0;
+	printf (" Observer:   %s\n", ser_header.Observer);
+	printf (" Instrument: %s\n", ser_header.Instrument);
+	printf (" Telescope:  %s\n", ser_header.Telescope);
+	printf (" DateTime:   %llu\n", ser_header.DateTime);
+	printf (" DateTimeUTC %llu\n", ser_header.DateTimeUTC);
+}
+
 void ApplicationWindow::openRawFile(const QString &s)
 {
 	if (s.isEmpty())
 		return;
 
-	if (m_saveRaw.openMode())
+	if (m_saveRaw.openMode()){
+	        if (m_useSERFormatAct->isChecked()) 
+		      addSERHeader (n_frames_saved);
 		m_saveRaw.close();
+	}
 	m_saveRaw.setFileName(s);
 	m_saveRaw.open(QIODevice::WriteOnly | QIODevice::Truncate);
 	m_saveRawAct->setChecked(true);
+	if (m_useSERFormatAct->isChecked()) 
+	        addSERHeader (0);
 }
 
 void ApplicationWindow::saveRaw(bool checked)
 {
 	if (!checked) {
-		if (m_saveRaw.openMode())
+    	        if (m_saveRaw.openMode()){
+		        if (m_useSERFormatAct->isChecked()) 
+			        addSERHeader (n_frames_saved);
 			m_saveRaw.close();
+		}
 		return;
 	}
 
