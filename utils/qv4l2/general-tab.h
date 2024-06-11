@@ -25,6 +25,7 @@
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QStackedWidget>
+#include <QLineEdit>
 #include <sys/time.h>
 #include <linux/videodev2.h>
 #include <map>
@@ -373,6 +374,10 @@ private:
 	QSlider *m_composeLeft;
 	QSlider *m_composeHeight;
 	QSlider *m_composeTop;
+
+        QLineEdit *m_observer;
+        QLineEdit *m_instrument;
+        QLineEdit *m_telescope;
 };
 
 #endif

@@ -1749,15 +1749,43 @@ void ApplicationWindow::addSERHeader(int nframes)
         memset ((char*)&lucam, 0, sizeof(lucam)); // zero
 	memcpy ((char*)&lucam, "LUCAM-RECORDER", 14);
         memset ((char*)&ser_header, 0, sizeof(ser_header)); // zero
-	ser_header.ColorID = 0; // m_capDestFormat.fmt.pix.pixelformat , m_capImage->bytesPerLine()
+
+	if (m_capImage->depth() == 24)
+	        ser_header.ColorID = 100; // RGB
+	else
+	        ser_header.ColorID = 0; // MONO
+	
 	ser_header.LittleEndian = 1;
+
 	ser_header.ImageWidth  = m_capImage->width();
 	ser_header.ImageHeight = m_capImage->height();
-	ser_header.PixelDepthPerPlane = m_capImage->depth();
+
+	if (m_capImage->depth() == 24)
+	        ser_header.PixelDepthPerPlane = 8; // RGB 3x8 = 24
+	else
+	        ser_header.PixelDepthPerPlane = 16;
+
 	ser_header.FrameCount = nframes; // adjust at end!!
-	memcpy ((char *)ser_header.Observer,   "AAAA Observer AAAAAAAAAAAAAAAAAAAAAAAAAA", 40);
-	memcpy ((char *)ser_header.Instrument, "AAAA Instrument V4L2 Cam AAAAAAAAAAAAAAA", 40);
-	memcpy ((char *)ser_header.Telescope,  "AAAA Linux AAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 40);
+
+
+	memcpy ((char *)ser_header.Observer,   "----------------------------------------", 40);
+	QByteArray name = qgetenv("USER");
+	if (name.isEmpty())
+	        name = qgetenv("USERNAME");
+	if (!name.isEmpty()){
+	        int len = name.length();
+		len = len > 40 ? 40:len;
+	        memcpy ((char *)ser_header.Observer, name.data(), len);
+	}
+
+	memcpy ((char *)ser_header.Instrument, "----------------------------------------", 40);
+	struct v4l2_capability m_querycap;
+	querycap(m_querycap);
+	int len = strlen((const char *)m_querycap.card);
+	len = len > 40 ? 40:len;
+	memcpy ((char *)ser_header.Instrument, (const char *)m_querycap.card, len);
+		
+	memcpy ((char *)ser_header.Telescope,  "---- Telescope -------------------------", 40);
 
 	struct timespec tp;
 	clock_gettime (CLOCK_REALTIME, &tp);
@@ -1767,7 +1795,7 @@ void ApplicationWindow::addSERHeader(int nframes)
 
         if (nframes>0){		
 		// write tailer....
-		printf ("Finish writing Raw as SER (LUCAM-RECORDER) File, # Frames: %d", ser_header.FrameCount);
+		printf ("Finish writing Raw as SER (LUCAM-RECORDER) File, # Frames: %d\n", ser_header.FrameCount);
 		if (n_frames_saved > FRAME_TIMESTAMPS_BUFFER_LEN)
 		        printf ("WARNING: more frames saves than time stamps available (buffer limit reached) MAX: %d\n", FRAME_TIMESTAMPS_BUFFER_LEN);
 		for (int i=0; i<n_frames_saved; ++i){
@@ -1788,7 +1816,7 @@ void ApplicationWindow::addSERHeader(int nframes)
 
 	n_frames_saved = 0; // init to 0
 	
-	printf ("Writing Raw as SER (LUCAM-RECORDER) File:");
+	printf ("Writing Raw as SER (LUCAM-RECORDER) File:\n");
 	printf (" ColorID=%d %s\n", ser_header.ColorID, ser_header.ColorID==0 ? "MONO": ser_header.ColorID < 100?"BAYER_***":"RGB/BGR");
 	printf (" %sEndian\n", ser_header.LittleEndian?"Little":"Big");
 	printf (" Image Width %d x Height %d\n", ser_header.ImageWidth, ser_header.ImageHeight);

@@ -291,6 +291,22 @@ GeneralTab::GeneralTab(const QString &device, cv4l_fd *fd, int n, QWidget *paren
 		updateVidFormat();
 	}
 
+	addTitle("SER Recording Settings");
+	//addLabel("Rec Binning");
+	//m_capMethods = new QComboBox(parent);
+	addLabel("Observer");
+	m_observer = new QLineEdit(parent);
+	addWidget(m_observer);
+
+	addLabel("Instrument");
+	m_instrument = new QLineEdit(parent);
+	addWidget(m_instrument);
+
+	addLabel("Telescope");
+	m_telescope = new QLineEdit(parent);
+	addWidget(m_telescope);
+
+	
 done:
 	QGridLayout::addWidget(new QWidget(parent), rowCount(), 0, 1, n);
 	setRowStretch(rowCount() - 1, 1);
